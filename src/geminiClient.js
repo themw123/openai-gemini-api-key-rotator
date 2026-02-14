@@ -11,18 +11,21 @@ class GeminiClient {
     // Check if an API key was provided in headers
     const providedApiKey = headers['x-goog-api-key'];
 
+    // Detect streaming based on the path
+    const isStreaming = path && path.includes(':streamGenerateContent');
+
     // If an API key was provided, use it directly without rotation
     if (providedApiKey) {
       const maskedKey = this.maskApiKey(providedApiKey);
-      console.log(`[GEMINI::${maskedKey}] Using provided API key`);
+      console.log(`[GEMINI::${maskedKey}] Using provided API key${isStreaming ? ' (STREAMING)' : ''}`);
 
       // Remove the x-goog-api-key from headers since we'll handle it
       const cleanHeaders = { ...headers };
       delete cleanHeaders['x-goog-api-key'];
 
       try {
-        const response = await this.sendRequest(method, path, body, cleanHeaders, providedApiKey, true);
-        console.log(`[GEMINI::${maskedKey}] Response (${response.statusCode})`);
+        const response = await this.sendRequest(method, path, body, cleanHeaders, providedApiKey, true, isStreaming);
+        console.log(`[GEMINI::${maskedKey}] Response (${response.statusCode})${isStreaming ? ' [STREAM STARTED]' : ''}`);
         return response;
       } catch (error) {
         console.log(`[GEMINI::${maskedKey}] Request failed: ${error.message}`);
@@ -45,10 +48,10 @@ class GeminiClient {
     while ((apiKey = requestContext.getNextKey()) !== null) {
       const maskedKey = this.maskApiKey(apiKey);
 
-      console.log(`[GEMINI::${maskedKey}] Attempting ${method} ${path}`);
+      console.log(`[GEMINI::${maskedKey}] Attempting ${method} ${path}${isStreaming ? ' (STREAMING)' : ''}`);
 
       try {
-        const response = await this.sendRequest(method, path, body, headers, apiKey, false);
+        const response = await this.sendRequest(method, path, body, headers, apiKey, false, isStreaming);
 
         // Check if this status code should trigger rotation
         if (rotationStatusCodes.has(response.statusCode)) {
@@ -58,7 +61,7 @@ class GeminiClient {
           continue;
         }
 
-        console.log(`[GEMINI::${maskedKey}] Success (${response.statusCode})`);
+        console.log(`[GEMINI::${maskedKey}] Success (${response.statusCode})${isStreaming ? ' [STREAM STARTED]' : ''}`);
         return response;
       } catch (error) {
         console.log(`[GEMINI::${maskedKey}] Request failed: ${error.message}`);
@@ -101,7 +104,7 @@ class GeminiClient {
     throw new Error('All API keys exhausted without clear error');
   }
 
-  sendRequest(method, path, body, headers, apiKey, useHeader = false) {
+  sendRequest(method, path, body, headers, apiKey, useHeader = false, isStreaming = false) {
     return new Promise((resolve, reject) => {
       // Construct full URL with smart version handling
       let fullUrl;
@@ -164,6 +167,16 @@ class GeminiClient {
       }
 
       const req = https.request(options, (res) => {
+        // If streaming is requested and it's a success response, resolve with the response stream
+        if (isStreaming && res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({
+            statusCode: res.statusCode,
+            headers: res.headers,
+            stream: res // The response object itself is a readable stream
+          });
+          return;
+        }
+
         let data = '';
         
         res.on('data', (chunk) => {

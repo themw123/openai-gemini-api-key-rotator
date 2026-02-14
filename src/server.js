@@ -471,8 +471,24 @@ class ProxyServer {
   }
 
   sendResponse(res, response) {
-    res.writeHead(response.statusCode, response.headers);
-    res.end(response.data);
+    if (response.stream) {
+      // Handle streaming response
+      const headers = { ...response.headers };
+      // Remove content-length as it's unknown for streams
+      delete headers['content-length'];
+      
+      res.writeHead(response.statusCode, headers);
+      response.stream.pipe(res);
+      
+      response.stream.on('error', (error) => {
+        console.error('[SERVER] Stream error:', error.message);
+        res.end();
+      });
+    } else {
+      // Handle regular response
+      res.writeHead(response.statusCode, response.headers);
+      res.end(response.data);
+    }
   }
 
   sendError(res, statusCode, message) {
@@ -491,7 +507,7 @@ class ProxyServer {
   }
 
   logApiResponse(requestId, response, requestBody = null) {
-    const contentLength = response.headers['content-length'] || (response.data ? response.data.length : 0);
+    const contentLength = response.headers['content-length'] || (response.data ? response.data.length : (response.stream ? 'unknown' : 0));
     const contentType = response.headers['content-type'] || 'unknown';
     
     // Store response data for viewing
@@ -502,19 +518,20 @@ class ProxyServer {
       status: response.statusCode,
       statusText: this.getStatusText(response.statusCode),
       contentType: contentType,
-      responseData: response.data,
-      requestBody: requestBody
+      responseData: response.stream ? '[Streamed Response]' : response.data,
+      requestBody: requestBody,
+      isStreaming: !!response.stream
     });
     
     // Log basic response info to console only (structured logging handled in handleRequest)
-    const responseMsg = `[REQ-${requestId}] Response: ${response.statusCode} ${this.getStatusText(response.statusCode)}`;
+    const responseMsg = `[REQ-${requestId}] Response: ${response.statusCode} ${this.getStatusText(response.statusCode)}${response.stream ? ' (STREAM)' : ''}`;
     const contentMsg = `[REQ-${requestId}] Content-Type: ${contentType}, Size: ${contentLength} bytes`;
     
     console.log(responseMsg);
     console.log(contentMsg);
     
     // For error responses, log the error details to console
-    if (response.statusCode >= 400) {
+    if (response.statusCode >= 400 && response.data) {
       try {
         const errorData = JSON.parse(response.data);
         if (errorData.error) {
@@ -531,7 +548,9 @@ class ProxyServer {
     
     // For successful responses, log basic success info to console
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      const successMsg = `[REQ-${requestId}] Request completed successfully`;
+      const successMsg = response.stream 
+        ? `[REQ-${requestId}] Stream started successfully`
+        : `[REQ-${requestId}] Request completed successfully`;
       console.log(successMsg);
     }
   }

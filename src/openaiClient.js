@@ -8,6 +8,17 @@ class OpenAIClient {
   }
 
   async makeRequest(method, path, body, headers = {}, customStatusCodes = null) {
+    // Detect streaming based on body
+    let isStreaming = false;
+    if (body) {
+      try {
+        const parsedBody = typeof body === 'string' ? JSON.parse(body) : body;
+        isStreaming = parsedBody.stream === true;
+      } catch (e) {
+        // Not JSON or no stream property
+      }
+    }
+
     // Create a new request context for this specific request
     const requestContext = this.keyRotator.createRequestContext();
     let lastError = null;
@@ -22,10 +33,10 @@ class OpenAIClient {
     while ((apiKey = requestContext.getNextKey()) !== null) {
       const maskedKey = this.maskApiKey(apiKey);
 
-      console.log(`[OPENAI::${maskedKey}] Attempting ${method} ${path}`);
+      console.log(`[OPENAI::${maskedKey}] Attempting ${method} ${path}${isStreaming ? ' (STREAMING)' : ''}`);
 
       try {
-        const response = await this.sendRequest(method, path, body, headers, apiKey);
+        const response = await this.sendRequest(method, path, body, headers, apiKey, isStreaming);
 
         // Check if this status code should trigger rotation
         if (rotationStatusCodes.has(response.statusCode)) {
@@ -35,7 +46,7 @@ class OpenAIClient {
           continue;
         }
 
-        console.log(`[OPENAI::${maskedKey}] Success (${response.statusCode})`);
+        console.log(`[OPENAI::${maskedKey}] Success (${response.statusCode})${isStreaming ? ' [STREAM STARTED]' : ''}`);
         return response;
       } catch (error) {
         console.log(`[OPENAI::${maskedKey}] Request failed: ${error.message}`);
@@ -78,7 +89,7 @@ class OpenAIClient {
     throw new Error('All API keys exhausted without clear error');
   }
 
-  sendRequest(method, path, body, headers, apiKey) {
+  sendRequest(method, path, body, headers, apiKey, isStreaming = false) {
     return new Promise((resolve, reject) => {
       // Construct full URL - handle cases where path might be empty or just "/"
       let fullUrl;
@@ -117,6 +128,16 @@ class OpenAIClient {
       }
 
       const req = https.request(options, (res) => {
+        // If streaming is requested and it's a success response, resolve with the response stream
+        if (isStreaming && res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({
+            statusCode: res.statusCode,
+            headers: res.headers,
+            stream: res // The response object itself is a readable stream
+          });
+          return;
+        }
+
         let data = '';
         
         res.on('data', (chunk) => {
