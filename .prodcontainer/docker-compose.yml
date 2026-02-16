@@ -1,0 +1,13 @@
+services:
+  llm-key-rotator:
+    build:
+      context: ..
+      dockerfile: .prodcontainer/Dockerfile
+    container_name: llm-key-rotator
+    restart: unless-stopped
+    ports:
+      - "8990:8990"
+    env_file:
+      - ../.env
+    volumes:
+      - ..:/app
