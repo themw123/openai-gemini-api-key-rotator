@@ -244,7 +244,7 @@ class ProxyServer {
       const upstreamBody = this.sanitizeRequestBody(body);
 
       // Detect streaming request
-      const isStreaming = this.isStreamingRequest(body);
+      const isStreaming = this.isStreamingRequest(body, path, apiType);
       if (isStreaming) {
         console.log(`[REQ-${requestId}] Streaming request detected`);
       }
@@ -624,9 +624,13 @@ class ProxyServer {
   }
 
   /**
-   * Detect if a request body contains stream: true
+   * Detect OpenAI-compatible streaming or Gemini's native streaming endpoint.
    */
-  isStreamingRequest(body) {
+  isStreamingRequest(body, requestPath = '', apiType = '') {
+    if (apiType.toLowerCase() === 'gemini' && requestPath.includes(':streamGenerateContent')) {
+      return true;
+    }
+
     if (!body) return false;
     try {
       const parsed = typeof body === 'string' ? JSON.parse(body) : body;
